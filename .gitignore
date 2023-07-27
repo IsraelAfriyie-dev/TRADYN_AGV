@@ -1,0 +1,10 @@
+.idea/
+__pycache__/
+.ipynb_checkpoints
+
+/data
+/experiments
+
+landscapes.tgz
+trained_models.tgz
+context_exploration/data/envs/landscapes/

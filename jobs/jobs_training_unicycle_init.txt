@@ -1,0 +1,10 @@
+python -m context_exploration.train_model --id=model_env=unicycle_robotvary_terrainpatches_uselocalctx=True_seed=1 with unicycle_cfg env_name=unicycle_robotvary_terrainpatches use_env_local_context=True seed=1
+python -m context_exploration.train_model --id=model_env=unicycle_robotvary_terrainpatches_uselocalctx=True_seed=2 with unicycle_cfg env_name=unicycle_robotvary_terrainpatches use_env_local_context=True seed=2
+python -m context_exploration.train_model --id=model_env=unicycle_robotvary_terrainpatches_uselocalctx=True_seed=3 with unicycle_cfg env_name=unicycle_robotvary_terrainpatches use_env_local_context=True seed=3
+python -m context_exploration.train_model --id=model_env=unicycle_robotvary_terrainpatches_uselocalctx=True_seed=4 with unicycle_cfg env_name=unicycle_robotvary_terrainpatches use_env_local_context=True seed=4
+python -m context_exploration.train_model --id=model_env=unicycle_robotvary_terrainpatches_uselocalctx=True_seed=5 with unicycle_cfg env_name=unicycle_robotvary_terrainpatches use_env_local_context=True seed=5
+python -m context_exploration.train_model --id=model_env=unicycle_robotvary_terrainpatches_uselocalctx=False_seed=1 with unicycle_cfg env_name=unicycle_robotvary_terrainpatches use_env_local_context=False seed=1
+python -m context_exploration.train_model --id=model_env=unicycle_robotvary_terrainpatches_uselocalctx=False_seed=2 with unicycle_cfg env_name=unicycle_robotvary_terrainpatches use_env_local_context=False seed=2
+python -m context_exploration.train_model --id=model_env=unicycle_robotvary_terrainpatches_uselocalctx=False_seed=3 with unicycle_cfg env_name=unicycle_robotvary_terrainpatches use_env_local_context=False seed=3
+python -m context_exploration.train_model --id=model_env=unicycle_robotvary_terrainpatches_uselocalctx=False_seed=4 with unicycle_cfg env_name=unicycle_robotvary_terrainpatches use_env_local_context=False seed=4
+python -m context_exploration.train_model --id=model_env=unicycle_robotvary_terrainpatches_uselocalctx=False_seed=5 with unicycle_cfg env_name=unicycle_robotvary_terrainpatches use_env_local_context=False seed=5
