@@ -105,6 +105,27 @@ To evaluate the planning performance of the models, run each command in `jobs/jo
 To generate the paper figures, see the notebook at [paper_figures/unicycle/paper_figures.ipynb](paper_figures/unicycle/paper_figures.ipynb) and [context_exploration/evaluation/notebooks/evaluation_unicycle.ipynb](context_exploration/evaluation/notebooks/evaluation_unicycle.ipynb).
 
 
+## Errata
+May 2024
+
+* We have discovered an error in the code used to generate Figure 6 in the paper. The fix minimally changes the numbers reported in Figure 6, but does not affect the significance statements. We have fixed the bug in the branch [bugfix_plots](https://github.com/EmbodiedVision/tradyn/tree/bugfix_plots/).
+
+* In Figure 5, we report an error on the velocity normalized to the range $[-1, 1]$ (Norm. velocity). In the branch [bugfix_plots](https://github.com/EmbodiedVision/tradyn/tree/bugfix_plots/), we have updated the plot to show the velocity error without rescaling.
+
+
+* We have discovered an error in the implementation of (Achterhold & Stueckler, 2021, http://proceedings.mlr.press/v130/achterhold21a.html), which we build upon. In contrast to what is reported in (Achterhold & Stueckler, 2021), not the models with the minimal validation loss are used for the final evaluation, but those after a fixed number of training steps. The branch [bugfix_models](https://github.com/EmbodiedVision/tradyn/tree/bugfix_models/) contains an evaluation at minimal validation loss, including the updates for the plots mentioned above.
+
+  * In terms of prediction error (Fig. 5) and control energy (Fig. 6), we found the two variants to yield comparable results.
+  * Slightly different trajectories are followed compared to those shown in Figures 7 and 8. In both variants, terrain lookup avoids high-friction regions and yields a reduction in throttle control energy.
+  * The updated models show a reduced terminal distance to the goal (Table 2):
+    * +T, +C variant (original): [P20: 2.16mm / med: 3.85mm / P80: 5.61mm] 
+    * +T, +C variant (updated): [P20: 1.70mm / med: 2.89mm / P80: 4.14mm] 
+  * The number of failed tasks (Table 2) is similar (original: 6 / 0 / 14 / 0, updated: 7 / 0 / 13 / 0).
+
+
+
+
+
 ## Code license
 See [LICENSE](LICENSE).
 
