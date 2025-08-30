@@ -2,11 +2,12 @@
 # Integration with TRADYN AGV Failure Recognition System
 
 # 1. ADD these imports at the top (around line 18, after the other imports)
-from .FailureRecognizer import (
+from failure_recognizer import (
     FailureLearningSystem, 
-    TerrainContext, 
-    RobotContext, 
+    TerrainFailureDetector, 
     FailureType,
+    TerrainContext,
+    RobotContext,
     create_terrain_context_from_data,
     create_robot_context_from_state
 )
