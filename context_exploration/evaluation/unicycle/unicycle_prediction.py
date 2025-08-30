@@ -1,11 +1,25 @@
-# Step 2B: Modifications to unicycle_prediction.py
-# These are the EXACT changes to make
+"""
+Enhanced unicycle prediction module with integrated failure recognition system.
+This module extends the original prediction capabilities to detect and analyze
+both ground truth failures and prediction divergences.
+"""
 
-# 1. ADD this import at the top (around line 16, after other imports)
+import torch
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.patches import Circle, Rectangle
+from matplotlib.collections import LineCollection
+import pickle
+import os
+import yaml
+
+# ADD: Import the FailureRecognizer
 from .FailureRecognizer import FailureRecognizer, FailureType
 
-# 2. MODIFY the predict_batch function 
-# FIND this function (around line 25) and ENHANCE it
+# Original imports (update these based on your actual imports)
+from .data_utils import collect_random_traj
+from .models import load_transition_model
+
 
 def predict_batch(
     vec_env,
@@ -19,6 +33,12 @@ def predict_batch(
 ):
     """
     Compute prediction statistics for batch - ENHANCED with failure recognition
+    
+    Returns:
+        gt_obs_arr: Ground truth observations
+        action_arr: Actions taken
+        pred_arr: Model predictions
+        prediction_failures: List of failure analysis per batch
     """
     if transition_model.local_context_dim > 0:
         local_ctx_fcn = vec_env.query_terrain_state
@@ -111,12 +131,13 @@ def predict_batch(
     
     return gt_obs_arr, action_arr, pred_arr, prediction_failures
 
-# 3. MODIFY the evaluate_predict_batch function
-# FIND this function (around line 60) and ADD failure metrics
 
 def evaluate_predict_batch(gt_obs_arr, action_arr, pred_arr, prediction_failures=None):
     """
     Evaluate batch of prediction tasks - ENHANCED with failure analysis
+    
+    Returns:
+        batch_eval: List of evaluation metrics including failure analysis
     """
     # x, y, v, cos(th), sin(th), <terrain>
     l2_norm = lambda x: np.sqrt((x ** 2).sum(axis=-1))
@@ -172,40 +193,111 @@ def evaluate_predict_batch(gt_obs_arr, action_arr, pred_arr, prediction_failures
     
     return batch_eval
 
-# 4. UPDATE the calling functions to handle new return values
-# FIND run_batch_prediction_evaluations function (around line 97) and MODIFY:
 
 def run_batch_prediction_evaluations(run_id, calibrate_robot, evaluation_seed):
-    # ... existing code stays the same until the predict_batch call ...
+    """
+    Run batch prediction evaluations with failure analysis
+    """
+    # Load configuration and models
+    config_path = f"configs/{run_id}.yaml"
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f)
     
-    # CHANGE this line (around line 140):
-    # OLD: gt_obs_arr, action_arr, pred_arr = predict_batch(...)
-    # NEW:
-    gt_obs_arr, action_arr, pred_arr, prediction_failures = predict_batch(
-        vec_env,
-        context_seed,
-        env_seed,
-        pred_action_seed,
-        transition_model,
-        context_latent,
-        initial_state,
-        n_pred_transitions,
-    )
+    # Initialize environment
+    vec_env = create_vec_env(config['env_params'])
+    
+    # Load transition model
+    transition_model = load_transition_model(run_id, config)
+    
+    # Set seeds
+    np.random.seed(evaluation_seed)
+    torch.manual_seed(evaluation_seed)
+    
+    # Generate test contexts
+    n_test_contexts = config.get('n_test_contexts', 10)
+    n_pred_transitions = config.get('n_pred_transitions', 100)
+    
+    all_results = []
+    
+    for context_idx in range(n_test_contexts):
+        context_seed = np.random.randint(0, 10000)
+        env_seed = np.random.randint(0, 10000)
+        pred_action_seed = np.random.randint(0, 10000)
+        
+        # Get context latent
+        context_latent = transition_model.encode_context(context_seed)
+        
+        # Get initial state
+        vec_env.reset(seed=env_seed)
+        initial_state = vec_env.get_state()
+        
+        # MODIFIED: Get predictions with failure analysis
+        gt_obs_arr, action_arr, pred_arr, prediction_failures = predict_batch(
+            vec_env,
+            context_seed,
+            env_seed,
+            pred_action_seed,
+            transition_model,
+            context_latent,
+            initial_state,
+            n_pred_transitions,
+        )
+        
+        # MODIFIED: Evaluate with failure analysis
+        batch_eval = evaluate_predict_batch(gt_obs_arr, action_arr, pred_arr, prediction_failures)
+        
+        # Store results
+        results = {
+            'context_idx': context_idx,
+            'context_seed': context_seed,
+            'batch_eval': batch_eval,
+            'failure_summary': {
+                'total_gt_failures': sum(item['gt_failures_detected'] for item in batch_eval),
+                'total_pred_failures': sum(item['prediction_failures_detected'] for item in batch_eval),
+                'unique_failure_types': list(set(
+                    ft for item in batch_eval for ft in item['failure_types']
+                ))
+            }
+        }
+        all_results.append(results)
+        
+        # Print summary
+        print(f"Context {context_idx}: GT failures={results['failure_summary']['total_gt_failures']}, "
+              f"Pred failures={results['failure_summary']['total_pred_failures']}")
+    
+    return all_results
 
-    # CHANGE this line:
-    # OLD: batch_eval = evaluate_predict_batch(gt_obs_arr, action_arr, pred_arr)
-    # NEW:
-    batch_eval = evaluate_predict_batch(gt_obs_arr, action_arr, pred_arr, prediction_failures)
-    
-    # ... rest of the function stays the same ...
 
-# 5. ALSO UPDATE run_single_prediction_evaluation function (around line 170)
-def run_single_prediction_evaluation():
-    # ... existing code stays the same until the predict_batch call ...
+def run_single_prediction_evaluation(
+    run_id, 
+    context_seed=1234, 
+    env_seed=5678, 
+    pred_action_seed=9012,
+    n_pred_transitions=100,
+    visualize=True
+):
+    """
+    Run single prediction evaluation with failure analysis and visualization
+    """
+    # Load configuration and models
+    config_path = f"configs/{run_id}.yaml"
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f)
     
-    # CHANGE this line (around line 200):
-    # OLD: gt_obs_arr, action_arr, pred_arr = predict_batch(...)
-    # NEW:
+    # Initialize environment
+    vec_env = create_vec_env(config['env_params'])
+    
+    # Load transition model
+    transition_model = load_transition_model(run_id, config)
+    
+    # Get context latent
+    context_latent = transition_model.encode_context(context_seed)
+    
+    # Get initial state
+    vec_env.reset(seed=env_seed)
+    initial_state = vec_env.get_state()
+    
+    # MODIFIED: Get predictions with failure analysis
     gt_obs_arr, action_arr, pred_arr, prediction_failures = predict_batch(
         vec_env,
         context_seed,
@@ -219,10 +311,124 @@ def run_single_prediction_evaluation():
     
     # ADD: Print failure information for single evaluation
     if prediction_failures:
-        print(f"Prediction failures detected: {len(prediction_failures[0])} failures")
+        print(f"\nPrediction failures detected: {len(prediction_failures[0])} failures")
         for failure in prediction_failures[0][:3]:  # Show first 3 failures
             print(f"  Step {failure['step']}: GT failure={failure['gt_failure']}, "
                   f"Pred failure={failure['prediction_failure']}, "
                   f"Pos error={failure['position_error']:.4f}")
     
-    # The rest of the visualization code stays the same...
+    # Visualization
+    if visualize:
+        fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+        
+        # Plot trajectories
+        ax = axes[0, 0]
+        ax.plot(gt_obs_arr[:, 0, 0], gt_obs_arr[:, 0, 1], 'b-', label='Ground Truth', linewidth=2)
+        ax.plot(pred_arr[:, 0, 0], pred_arr[:, 0, 1], 'r--', label='Prediction', linewidth=2)
+        
+        # Mark failure points
+        if prediction_failures and prediction_failures[0]:
+            for failure in prediction_failures[0]:
+                if failure['gt_failure']:
+                    ax.plot(failure['gt_position'][0], failure['gt_position'][1], 
+                           'ko', markersize=8, label='GT Failure' if failure == prediction_failures[0][0] else "")
+                if failure['prediction_failure']:
+                    ax.plot(failure['pred_position'][0], failure['pred_position'][1], 
+                           'rx', markersize=8, label='Pred Divergence' if failure == prediction_failures[0][0] else "")
+        
+        ax.set_xlabel('X Position')
+        ax.set_ylabel('Y Position')
+        ax.set_title('Trajectory Comparison with Failure Points')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        ax.axis('equal')
+        
+        # Plot position error over time
+        ax = axes[0, 1]
+        pos_errors = np.linalg.norm(gt_obs_arr[:, 0, :2] - pred_arr[:, 0, :2], axis=1)
+        ax.plot(pos_errors, 'b-', linewidth=2)
+        ax.axhline(y=0.1, color='r', linestyle='--', label='Failure Threshold')
+        ax.set_xlabel('Time Step')
+        ax.set_ylabel('Position Error')
+        ax.set_title('Prediction Error Over Time')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        
+        # Plot velocity comparison
+        ax = axes[1, 0]
+        ax.plot(gt_obs_arr[:, 0, 2], 'b-', label='GT Velocity', linewidth=2)
+        ax.plot(pred_arr[:, 0, 2], 'r--', label='Pred Velocity', linewidth=2)
+        ax.set_xlabel('Time Step')
+        ax.set_ylabel('Velocity')
+        ax.set_title('Velocity Comparison')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        
+        # Plot failure timeline
+        ax = axes[1, 1]
+        if prediction_failures and prediction_failures[0]:
+            failure_steps = [f['step'] for f in prediction_failures[0]]
+            failure_types = [f['gt_failure_type'] if f['gt_failure'] else 'Prediction' 
+                           for f in prediction_failures[0]]
+            
+            # Create a timeline visualization
+            for i, (step, ftype) in enumerate(zip(failure_steps, failure_types)):
+                color = 'red' if ftype != 'Prediction' else 'orange'
+                ax.barh(i, 1, left=step, height=0.8, color=color, alpha=0.7, 
+                       label=ftype if i == 0 else "")
+                ax.text(step + 0.5, i, f"{ftype[:10]}", va='center', fontsize=8)
+        
+        ax.set_xlim(0, n_pred_transitions)
+        ax.set_xlabel('Time Step')
+        ax.set_ylabel('Failure Events')
+        ax.set_title('Failure Timeline')
+        ax.grid(True, alpha=0.3, axis='x')
+        
+        plt.tight_layout()
+        plt.show()
+    
+    return gt_obs_arr, pred_arr, prediction_failures
+
+
+def create_vec_env(env_params):
+    """
+    Create vectorized environment
+    Note: Implement this based on your specific environment setup
+    """
+    # Placeholder - replace with your actual environment creation
+    pass
+
+
+def load_transition_model(run_id, config):
+    """
+    Load trained transition model
+    Note: Implement this based on your model loading logic
+    """
+    # Placeholder - replace with your actual model loading
+    pass
+
+
+if __name__ == "__main__":
+    # Example usage
+    run_id = "example_run"
+    
+    # Run batch evaluation with failure analysis
+    print("Running batch prediction evaluations with failure analysis...")
+    batch_results = run_batch_prediction_evaluations(
+        run_id=run_id,
+        calibrate_robot=False,
+        evaluation_seed=42
+    )
+    
+    # Run single evaluation with visualization
+    print("\nRunning single prediction evaluation with visualization...")
+    gt, pred, failures = run_single_prediction_evaluation(
+        run_id=run_id,
+        context_seed=1234,
+        env_seed=5678,
+        pred_action_seed=9012,
+        n_pred_transitions=100,
+        visualize=True
+    )
+    
+    print("\nEvaluation complete!")
