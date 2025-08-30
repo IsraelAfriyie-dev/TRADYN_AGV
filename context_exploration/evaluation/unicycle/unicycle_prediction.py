@@ -9,7 +9,7 @@ import pickle
 import json
 
 # 1. ADD this import at the top (around line 16, after other imports)
-from .FailureRecognizer import (
+from failure_recognizer import (
     FailureLearningSystem, 
     TerrainFailureDetector, 
     FailureType,
