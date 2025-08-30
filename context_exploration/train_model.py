@@ -18,6 +18,10 @@ from pathlib import Path
 import matplotlib
 import numpy as np
 import torch
+# Add this import at the top
+from .utils.failure_recognition import FailureRecognizer
+
+# Then in the training loop, add failure monitoring
 from torch.distributions import Normal, kl_divergence
 from torch.nn.utils import clip_grad_norm_
 from torch.utils.tensorboard import SummaryWriter
