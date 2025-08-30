@@ -1,5 +1,12 @@
 # Step 2B: Exact Modifications to unicycle_prediction.py
 # Integration with TRADYN AGV Failure Recognition System
+from enum import Enum
+from dataclasses import dataclass, field
+from typing import List, Dict, Any, Optional, Tuple, Set
+import numpy as np
+from datetime import datetime
+import pickle
+import json
 
 # 1. ADD this import at the top (around line 16, after other imports)
 from .FailureRecognizer import (
