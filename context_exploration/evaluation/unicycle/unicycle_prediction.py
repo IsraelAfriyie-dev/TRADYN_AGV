@@ -1,28 +1,11 @@
-"""
-Unicycle prediction evaluation
+# Step 2B: Modifications to unicycle_prediction.py
+# These are the EXACT changes to make
 
-Copyright 2023 Max-Planck-Gesellschaft
-Code author: Jan Achterhold, jan.achterhold@tuebingen.mpg.de
-Embodied Vision Group, Max Planck Institute for Intelligent Systems, Tübingen
+# 1. ADD this import at the top (around line 16, after other imports)
+from .FailureRecognizer import FailureRecognizer, FailureType
 
-This source code is licensed under the MIT license found in the
-LICENSE.md file in the root directory of this source tree or at
-https://opensource.org/licenses/MIT.
-"""
-import sys
-
-import numpy as np
-import pandas as pd
-import torch
-
-from context_exploration.evaluation.unicycle.common import (
-    DummyVecEnv,
-    calibrate_batch,
-    collect_random_traj,
-    generate_eval_setting_batch,
-)
-from context_exploration.model.loader import get_run_directory, load_model
-
+# 2. MODIFY the predict_batch function 
+# FIND this function (around line 25) and ENHANCE it
 
 def predict_batch(
     vec_env,
@@ -35,14 +18,14 @@ def predict_batch(
     n_transitions,
 ):
     """
-    Compute prediction statistics for batch
+    Compute prediction statistics for batch - ENHANCED with failure recognition
     """
     if transition_model.local_context_dim > 0:
         local_ctx_fcn = vec_env.query_terrain_state
     else:
         local_ctx_fcn = None
 
-    # Actual trajectory
+    # Actual trajectory (ground truth)
     env_context = {"seed": context_seed}
     gt_obs_arr, action_arr = collect_random_traj(
         vec_env, env_context, env_seed, action_seed, initial_state, n_transitions
@@ -50,37 +33,90 @@ def predict_batch(
     if transition_model.local_context_dim > 0:
         gt_obs_arr = gt_obs_arr[..., : -transition_model.local_context_dim]
 
-    # Prediction
+    # Model prediction
     x = torch.from_numpy(gt_obs_arr[0]).to(transition_model.device).float()
-    action_arr = torch.from_numpy(action_arr).to(transition_model.device).float()
+    action_arr_torch = torch.from_numpy(action_arr).to(transition_model.device).float()
     pred_arr = transition_model.forward_multi_step(
         x,
-        action_arr,
+        action_arr_torch,
         context_latent.mean,
         local_ctx_fcn,
         return_mean_only=True,
         probe_dict=None,
     )
     pred_arr = pred_arr.cpu().detach().numpy()
-    return gt_obs_arr, action_arr, pred_arr
+    
+    # ADD: Prediction failure analysis
+    # Initialize failure recognizers for prediction analysis
+    prediction_failure_recognizers = [FailureRecognizer() for _ in range(gt_obs_arr.shape[1])]
+    prediction_failures = [[] for _ in range(gt_obs_arr.shape[1])]
+    
+    # Analyze prediction failures step by step
+    for step in range(1, gt_obs_arr.shape[0]):  # Start from step 1 (after initial state)
+        for batch_idx in range(gt_obs_arr.shape[1]):
+            
+            # Extract ground truth robot state
+            gt_robot_state = type('RobotState', (), {
+                'position': gt_obs_arr[step, batch_idx, :2],
+                'velocity': gt_obs_arr[step, batch_idx, 2:4] if gt_obs_arr.shape[2] > 2 else np.array([0, 0]),
+                'heading': np.arctan2(gt_obs_arr[step, batch_idx, 4], gt_obs_arr[step, batch_idx, 3]) if gt_obs_arr.shape[2] > 4 else 0.0
+            })()
+            
+            # Extract predicted robot state  
+            pred_robot_state = type('RobotState', (), {
+                'position': pred_arr[step, batch_idx, :2],
+                'velocity': pred_arr[step, batch_idx, 2:4] if pred_arr.shape[2] > 2 else np.array([0, 0]),
+                'heading': np.arctan2(pred_arr[step, batch_idx, 4], pred_arr[step, batch_idx, 3]) if pred_arr.shape[2] > 4 else 0.0
+            })()
+            
+            # Action taken
+            action_state = type('Action', (), {
+                'throttle': action_arr[step-1, batch_idx]  # step-1 because action_arr is shorter
+            })()
+            
+            # Dummy goal (for failure detection - prediction doesn't have explicit goals)
+            dummy_goal = gt_obs_arr[-1, batch_idx, :2]  # Use final position as "goal"
+            
+            # Simple terrain context
+            terrain_context = type('TerrainContext', (), {
+                'friction': np.array([1.0]),
+                'elevation': np.array([0.0])
+            })()
+            
+            # Check if ground truth trajectory shows failure
+            is_gt_failure, gt_failure_type, gt_details = prediction_failure_recognizers[batch_idx].check_for_failure(
+                gt_robot_state, action_state, dummy_goal, terrain_context
+            )
+            
+            # Check prediction quality - is the prediction diverging from reality?
+            position_error = np.linalg.norm(gt_robot_state.position - pred_robot_state.position)
+            velocity_error = np.linalg.norm(gt_robot_state.velocity - pred_robot_state.velocity)
+            
+            # Detect prediction failure (large divergence from ground truth)
+            is_pred_failure = (position_error > 0.1) or (velocity_error > 0.5)  # Thresholds to tune
+            
+            if is_gt_failure or is_pred_failure:
+                failure_info = {
+                    'step': step,
+                    'gt_failure': is_gt_failure,
+                    'gt_failure_type': gt_failure_type.value if gt_failure_type else None,
+                    'gt_failure_details': gt_details,
+                    'prediction_failure': is_pred_failure,
+                    'position_error': position_error,
+                    'velocity_error': velocity_error,
+                    'gt_position': gt_robot_state.position.copy(),
+                    'pred_position': pred_robot_state.position.copy()
+                }
+                prediction_failures[batch_idx].append(failure_info)
+    
+    return gt_obs_arr, action_arr, pred_arr, prediction_failures
 
+# 3. MODIFY the evaluate_predict_batch function
+# FIND this function (around line 60) and ADD failure metrics
 
-def evaluate_predict_batch(gt_obs_arr, action_arr, pred_arr):
+def evaluate_predict_batch(gt_obs_arr, action_arr, pred_arr, prediction_failures=None):
     """
-    Evaluate batch of prediction tasks
-
-    Parameters
-    ----------
-    gt_obs_arr: np.ndarray, shape [(T+1) x B x target_dim]
-    action_arr: np.ndarray, shape [T x B x obs_dim]
-    pred_arr: np.ndarray, shape [(T+1) x B x action_dim]
-
-    Returns
-    -------
-    batch_evals: List[Dict]
-        l2_pos: Euclidean distance between positions
-        l2_vel: Euclidean distance between velocities
-        abs_angle: Absolute angular error
+    Evaluate batch of prediction tasks - ENHANCED with failure analysis
     """
     # x, y, v, cos(th), sin(th), <terrain>
     l2_norm = lambda x: np.sqrt((x ** 2).sum(axis=-1))
@@ -93,75 +129,59 @@ def evaluate_predict_batch(gt_obs_arr, action_arr, pred_arr):
         pred_theta = np.arctan2(pred_arr[:, batch_idx, 4], pred_arr[:, batch_idx, 3])
         diff_theta = pred_theta - gt_theta
         # Normalize angle difference
-        # https://stackoverflow.com/a/2007279
         angle_diff = np.arctan2(np.sin(diff_theta), np.cos(diff_theta))
-        batch_eval.append(
-            {
-                "l2_pos": l2_pos,
-                "l2_vel": l2_vel,
-                "angle_diff": angle_diff,
-            }
-        )
+        
+        # EXISTING metrics
+        batch_item = {
+            "l2_pos": l2_pos,
+            "l2_vel": l2_vel,
+            "angle_diff": angle_diff,
+        }
+        
+        # ADD: Prediction failure analysis
+        if prediction_failures and batch_idx < len(prediction_failures):
+            batch_failures = prediction_failures[batch_idx]
+            
+            # Count different types of failures
+            gt_failures = [f for f in batch_failures if f['gt_failure']]
+            pred_failures = [f for f in batch_failures if f['prediction_failure']]
+            
+            batch_item.update({
+                "gt_failures_detected": len(gt_failures),
+                "prediction_failures_detected": len(pred_failures),
+                "total_failures": len(batch_failures),
+                "failure_types": [f['gt_failure_type'] for f in gt_failures if f['gt_failure_type']],
+                "max_position_error": max([f['position_error'] for f in batch_failures], default=0),
+                "max_velocity_error": max([f['velocity_error'] for f in batch_failures], default=0),
+                "first_failure_step": batch_failures[0]['step'] if batch_failures else None,
+                "failure_details": batch_failures
+            })
+        else:
+            batch_item.update({
+                "gt_failures_detected": 0,
+                "prediction_failures_detected": 0,
+                "total_failures": 0,
+                "failure_types": [],
+                "max_position_error": 0,
+                "max_velocity_error": 0,
+                "first_failure_step": None,
+                "failure_details": []
+            })
+            
+        batch_eval.append(batch_item)
+    
     return batch_eval
 
+# 4. UPDATE the calling functions to handle new return values
+# FIND run_batch_prediction_evaluations function (around line 97) and MODIFY:
 
 def run_batch_prediction_evaluations(run_id, calibrate_robot, evaluation_seed):
-    """
-    We compare the following settings:
-
-    Model trained on (given by run_id):
-        Patchy terrain (always)
-        Varying robot / Fixed robot
-        With context / without context
-        Terrain-lookup / Terrain-as-observation
-    Model evaluated with:
-        Calibrated robot
-        Uncalibrated robot (empty context set)
-    """
-
-    step = "100000_best"
-    device = "cuda"
-    reset_split = "test"
-    n_pred_transitions = 150
-    kwarg_updates = {
-        "reset_split": reset_split,
-        "max_duration": n_pred_transitions,
-    }
-    n_settings_per_evaluation = 30
-    n_calib_transitions = 10
-    env_name, transition_model, context_encoder = load_model(run_id, step, device)
-    vec_env = DummyVecEnv(env_name, kwarg_updates, n_settings_per_evaluation)
-
-    eval_idx_array = np.arange(
-        evaluation_seed * n_settings_per_evaluation,
-        (evaluation_seed + 1) * n_settings_per_evaluation,
-    )
-    eval_setting_batch = generate_eval_setting_batch(eval_idx_array)
-
-    context_seed = eval_setting_batch["context_seed"]
-    env_seed = eval_setting_batch["env_seed"]
-    calib_action_seed = env_seed
-    pred_action_seed = calib_action_seed + 1
-    initial_state = eval_setting_batch["initial_state"]
-
-    if calibrate_robot:
-        env_context = {"seed": context_seed}
-        context_latent, calib_obs, calib_act = calibrate_batch(
-            vec_env,
-            context_encoder,
-            env_context,
-            env_seed,
-            calib_action_seed,
-            initial_state,
-            n_calib_transitions,
-            return_obs_arr=True,
-        )
-    else:
-        context_latent = context_encoder.empty_set_context(
-            batch_dim=n_settings_per_evaluation
-        )
-
-    gt_obs_arr, action_arr, pred_arr = predict_batch(
+    # ... existing code stays the same until the predict_batch call ...
+    
+    # CHANGE this line (around line 140):
+    # OLD: gt_obs_arr, action_arr, pred_arr = predict_batch(...)
+    # NEW:
+    gt_obs_arr, action_arr, pred_arr, prediction_failures = predict_batch(
         vec_env,
         context_seed,
         env_seed,
@@ -172,68 +192,21 @@ def run_batch_prediction_evaluations(run_id, calibrate_robot, evaluation_seed):
         n_pred_transitions,
     )
 
-    batch_eval = evaluate_predict_batch(gt_obs_arr, action_arr, pred_arr)
-    for idx, item in enumerate(batch_eval):
-        item["run_id"] = run_id
-        item["step"] = step
-        item["reset_split"] = reset_split
-        item["calibrate_robot"] = calibrate_robot
-        item["n_calib_transitions"] = n_calib_transitions
-        item["obs_arr"] = gt_obs_arr[:, idx, :]
-        item["action_arr"] = action_arr[:, idx, :]
-        item["pred_arr"] = pred_arr[:, idx, :]
-        item["context_seed"] = context_seed[idx]
-        item["env_seed"] = env_seed[idx]
-        item["pred_action_seed"] = pred_action_seed[idx]
-        item["initial_state"] = initial_state[idx]
-        if calibrate_robot:
-            item["calib_obs"] = calib_obs[:, idx, :]
-            item["calib_act"] = calib_act[:, idx, :]
+    # CHANGE this line:
+    # OLD: batch_eval = evaluate_predict_batch(gt_obs_arr, action_arr, pred_arr)
+    # NEW:
+    batch_eval = evaluate_predict_batch(gt_obs_arr, action_arr, pred_arr, prediction_failures)
+    
+    # ... rest of the function stays the same ...
 
-    df = pd.DataFrame(batch_eval)
-    return df
-
-
+# 5. ALSO UPDATE run_single_prediction_evaluation function (around line 170)
 def run_single_prediction_evaluation():
-    run_id = "model_env=unicycle_robotvary_terrainpatches_uselocalctx=True_seed=1"
-    step = "100000_best"
-    device = "cuda"
-    n_pred_transitions = 150
-    calibrate_robot = True
-
-    kwarg_updates = {
-        "reset_split": "train",
-        "max_duration": n_pred_transitions,
-    }
-    env_name, transition_model, context_encoder = load_model(run_id, step, device)
-
-    context_seed = np.array([2215104])
-    env_seed = np.array([60969750])
-    calib_action_seed = env_seed
-    pred_action_seed = calib_action_seed + 1
-
-    initial_state = np.array([0.5, 0.5, 0, 1.83])[None, :]
-    n_instances = 1
-    n_calib_transitions = 50
-
-    vec_env = DummyVecEnv(env_name, kwarg_updates, n_instances)
-    env_context = {"seed": context_seed}
-    if calibrate_robot:
-        context_latent, calib_obs, calib_act = calibrate_batch(
-            vec_env,
-            context_encoder,
-            env_context,
-            env_seed,
-            calib_action_seed,
-            initial_state,
-            n_calib_transitions,
-            return_obs_arr=True,
-        )
-    else:
-        context_latent = context_encoder.empty_set_context(batch_dim=1)
-        calib_obs, calib_act = None, None
-
-    gt_obs_arr, action_arr, pred_arr = predict_batch(
+    # ... existing code stays the same until the predict_batch call ...
+    
+    # CHANGE this line (around line 200):
+    # OLD: gt_obs_arr, action_arr, pred_arr = predict_batch(...)
+    # NEW:
+    gt_obs_arr, action_arr, pred_arr, prediction_failures = predict_batch(
         vec_env,
         context_seed,
         env_seed,
@@ -243,57 +216,13 @@ def run_single_prediction_evaluation():
         initial_state,
         n_pred_transitions,
     )
-
-    import matplotlib.pyplot as plt
-
-    fig, ax = plt.subplots(nrows=1, ncols=1)
-    env = vec_env.instances[0]
-    env.initialize_context(context_seed[0])
-    env.plot_landscape(ax)
-    for instance_idx in range(1):
-        ax.plot(gt_obs_arr[:, instance_idx, 0], gt_obs_arr[:, instance_idx, 1])
-        ax.scatter(gt_obs_arr[:, instance_idx, 0], gt_obs_arr[:, instance_idx, 1])
-        ax.plot(pred_arr[:, instance_idx, 0], pred_arr[:, instance_idx, 1])
-        ax.scatter(pred_arr[:, instance_idx, 0], pred_arr[:, instance_idx, 1])
-        if calib_obs is not None:
-            ax.plot(calib_obs[:, instance_idx, 0], calib_obs[:, instance_idx, 1])
-            ax.scatter(calib_obs[:, instance_idx, 0], calib_obs[:, instance_idx, 1])
-    plt.xlim(0, 1)
-    plt.ylim(0, 1)
-    plt.show()
-
-
-def get_eval_filename(run_id, calibrate_robot, evaluation_seed):
-    run_dir = get_run_directory(run_id)
-    candidate_file = run_dir.joinpath(
-        "eval_pred_calib{}_seed{}.pkl".format(calibrate_robot, evaluation_seed)
-    )
-    return candidate_file
-
-
-def main(argv):
-    """
-    Calling schemes:
-
-    unicycle_prediction.py (no arguments)
-        Run a single experiment and show plot
-    unicycle_planning.py <RUN_ID> <CALIBRATE?> <EVAL_IDX>
-        Evaluate a particular run (for evaluation on the cluster)
-    """
-    if len(argv) == 1:
-        run_single_prediction_evaluation()
-    else:
-        run_id = str(argv[1])
-        calibrate_robot = {"True": True, "False": False}[argv[2]]
-        evaluation_seed = int(argv[3])
-        df = run_batch_prediction_evaluations(
-            run_id=run_id,
-            calibrate_robot=calibrate_robot,
-            evaluation_seed=evaluation_seed,
-        )
-        eval_filename = get_eval_filename(run_id, calibrate_robot, evaluation_seed)
-        df.to_pickle(eval_filename)
-
-
-if __name__ == "__main__":
-    main(sys.argv)
+    
+    # ADD: Print failure information for single evaluation
+    if prediction_failures:
+        print(f"Prediction failures detected: {len(prediction_failures[0])} failures")
+        for failure in prediction_failures[0][:3]:  # Show first 3 failures
+            print(f"  Step {failure['step']}: GT failure={failure['gt_failure']}, "
+                  f"Pred failure={failure['prediction_failure']}, "
+                  f"Pos error={failure['position_error']:.4f}")
+    
+    # The rest of the visualization code stays the same...
